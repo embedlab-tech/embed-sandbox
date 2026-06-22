@@ -1,0 +1,9 @@
+# Pins this project to the Xtensa Rust toolchain installed by `espup`.
+#
+# `espup install` links a custom toolchain that rustup exposes as "esp", so
+# rust-toolchain.toml selects it automatically for every `cargo` invocation in
+# this directory. If `cargo` complains the "esp" toolchain is missing, run
+# `espup install` (and source `~/export-esp.sh`) first.
+[toolchain]
+channel = "esp"
+components = ["rustfmt"]
