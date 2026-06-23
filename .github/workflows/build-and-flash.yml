@@ -1,0 +1,75 @@
+# Build firmware and flash to a board connected to the self-hosted runner.
+#
+# Prerequisites on the runner:
+#   - espup installed (provides Xtensa Rust toolchain + ESP-IDF)
+#   - source ~/export-esp.sh has been run (or added to .bashrc so the runner
+#     picks it up automatically)
+#   - espflash installed: cargo install espflash
+#   - The user running the runner service has write permission to /dev/ttyACM3
+#     (add a udev rule or add the user to the dialout group)
+#   - The board must be connected and set to bootloader mode before the flash
+#     step: hold BOOT, tap RESET, release BOOT.
+
+name: Build & Flash
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Source ESP environment
+        run: |
+          set -e
+          if [ -f "$HOME/export-esp.sh" ]; then
+            source "$HOME/export-esp.sh"
+            echo "ESP toolchain loaded"
+          else
+            echo "::warning::export-esp.sh not found at $HOME/export-esp.sh — build may fail"
+          fi
+          rustc --version
+          rustup show active-toolchain
+
+      - name: Build firmware (debug)
+        run: cargo build
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: embed-sandbox-firmware
+          path: target/xtensa-esp32s3-espidf/debug/embed-sandbox
+          retention-days: 1
+
+  flash:
+    runs-on: self-hosted
+    needs: build
+
+    steps:
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: embed-sandbox-firmware
+
+      - name: Check flash device
+        run: |
+          if [ -c /dev/ttyACM3 ]; then
+            echo "Device /dev/ttyACM3 present"
+            ls -l /dev/ttyACM3
+          else
+            echo "::error::Serial device /dev/ttyACM3 not found — is the board connected?"
+            exit 1
+          fi
+
+      - name: Flash board
+        run: |
+          chmod +x embed-sandbox
+          espflash flash \
+            --port /dev/ttyACM3 \
+            embed-sandbox

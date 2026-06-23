@@ -15,10 +15,6 @@ use log::*;
 mod board;
 
 // ---- Tunables ----------------------------------------------------------------
-
-/// Log period in ms per mode.
-const MODE_PERIOD_MS: &[(&str, u64)] = &[("fast", 100), ("medium", 500), ("regular", 1000)];
-
 const POLL_MS: u32 = 10;
 const LINE_BUF: usize = 80;
 
@@ -95,15 +91,16 @@ fn format_log_line(rng: &mut Lcg, n: u64) -> String {
 /// Emit a log line via the `log` facade (USB Serial/JTAG console).
 fn emit_log(rng: &mut Lcg, n: u64) {
     let line = format_log_line(rng, n);
+    let prefixed = format!("#{} {}", n, &line);
 
     if line.starts_with("[ERROR]") {
-        error!("{}", &line);
+        error!("{}", &prefixed);
     } else if line.starts_with("[WARN]") {
-        warn!("{}", &line);
+        warn!("{}", &prefixed);
     } else if line.starts_with("[DEBUG]") {
-        debug!("{}", &line);
+        debug!("{}", &prefixed);
     } else {
-        info!("{}", &line);
+        info!("{}", &prefixed);
     }
 }
 
@@ -114,6 +111,9 @@ struct Lcg(u64);
 impl Lcg {
     fn new() -> Self {
         let seed = unsafe { esp_idf_sys::esp_random() as u64 };
+        Self(seed.wrapping_add(1))
+    }
+    fn from_seed(seed: u64) -> Self {
         Self(seed.wrapping_add(1))
     }
 
@@ -156,31 +156,113 @@ fn poll_stdin() -> Option<u8> {
 }
 
 fn exec_cmd(
-    mode_ms: &mut u64,
+    rate_ms: &mut u64,
     counter: &mut u64,
+    rng: &mut Lcg,
+    base_seed: &mut u64,
+    paused: &mut bool,
     line: &str,
 ) {
     let parts: Vec<&str> = line.split_whitespace().collect();
 
     match parts.first().copied().unwrap_or("") {
-        "mode" => match parts.get(1).copied().unwrap_or("") {
-            m @ ("fast" | "medium" | "regular") => {
-                *mode_ms = MODE_PERIOD_MS.iter().find(|(n, _)| *n == m).unwrap().1;
-                info!("mode set to {} ({} ms interval)", m, mode_ms);
-            }
-            other => {
-                info!("unknown mode '{}'; use fast|medium|regular", other);
+        "rate" => match parts.get(1) {
+            Some(s) => match s.parse::<u64>() {
+                Ok(ms) if ms >= 10 => {
+                    *rate_ms = ms;
+                    info!("rate set to {} ms", ms);
+                }
+                Ok(_) => {
+                    info!("rate too low; minimum 10 ms");
+                }
+                Err(_) => {
+                    info!("invalid rate '{}'; use a number in ms", s);
+                }
+            },
+            None => {
+                info!("rate value required: rate <ms>");
             }
         },
+        "emit" => {
+            let n = parts
+                .get(1)
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(100)
+                .min(1000);
+            for _ in 0..n {
+                emit_log(rng, *counter);
+                *counter = counter.wrapping_add(1);
+            }
+            info!("emitted {} line(s)", n);
+        }
         "reset" => {
+            *rng = Lcg::from_seed(*base_seed);
             *counter = 0;
-            info!("log counter reset to 0");
+            info!("counter and RNG reset to base seed");
+        }
+        "pause" => {
+            *paused = true;
+            info!("output paused");
+        }
+        "resume" => {
+            *paused = false;
+            info!("output resumed");
+        }
+        "start" => {
+            info!("starting in 3..");
+            FreeRtos::delay_ms(1000);
+            info!("2..");
+            FreeRtos::delay_ms(1000);
+            info!("1..");
+            FreeRtos::delay_ms(1000);
+            *paused = false;
+            let n = 100;
+            for _ in 0..n {
+                emit_log(rng, *counter);
+                *counter = counter.wrapping_add(1);
+            }
+            info!("resumed, {} line(s) emitted", n);
+        }
+        "seed" => match parts.get(1) {
+            Some(s) => {
+                let n = if s.starts_with("0x") || s.starts_with("0X") {
+                    u64::from_str_radix(&s[2..], 16).ok()
+                } else {
+                    s.parse::<u64>().ok()
+                };
+                match n {
+                    Some(n) => {
+                        *base_seed = n;
+                        *rng = Lcg::from_seed(*base_seed);
+                        *counter = 0;
+                        info!("seed set to {} (counter reset)", n);
+                    }
+                    None => {
+                        info!("invalid seed '{}'; use decimal or 0x... hex number", s);
+                    }
+                }
+            }
+            None => {
+                info!("seed value required: seed <number>");
+            }
+        },
+        "status" => {
+            info!(
+                "rate={} ms  counter={}  seed=0x{:016x}  paused={}",
+                rate_ms, counter, base_seed, paused
+            );
         }
         "help" | "?" => {
             info!(
                 "Commands:\n\
-                 mode fast|medium|regular    set log output rate\n\
-                 reset                     reset log sequence counter\n\
+                 rate <ms>                 set log interval (min 10 ms)\n\
+                 emit [n]                  emit n lines now (default 100, max 1000)\n\
+                 pause                     stop periodic output\n\
+                 resume                    resume periodic output\n\
+                 start                     countdown 3..2..1.., resume, emit 100 lines\n\
+                 reset                     reset counter & RNG to base seed\n\
+                 seed <n>                  set RNG seed, reset counter\n\
+                 status                    show current state\n\
                  help                      this message"
             );
         }
@@ -199,17 +281,19 @@ fn main() -> anyhow::Result<()> {
     esp_idf_svc::log::EspLogger::initialize_default();
 
     info!("=== embed-sandbox serial test tool ===");
-    info!("Type `help` for commands.");
+    info!("Output is paused. Type `help` for commands, `resume` to start.");
 
     let _peripherals = Peripherals::take()?;
 
     // --- State ---------------------------------------------------------------
     let mut rng = Lcg::new();
-    let mut mode_ms = MODE_PERIOD_MS[2].1; // "regular"
+    let mut rate_ms = 1000u64;
     let mut counter = 0u64;
     let mut last_log = Instant::now();
     let mut line_buf = [0u8; LINE_BUF];
     let mut line_pos = 0usize;
+    let mut base_seed = rng.0.wrapping_sub(1);
+    let mut paused = true;
 
     // --- Main loop -----------------------------------------------------------
     loop {
@@ -225,7 +309,7 @@ fn main() -> anyhow::Result<()> {
                         .to_ascii_lowercase();
                     line_pos = 0;
                     if !cmd.is_empty() {
-                        exec_cmd(&mut mode_ms, &mut counter, &cmd);
+                        exec_cmd(&mut rate_ms, &mut counter, &mut rng, &mut base_seed, &mut paused, &cmd);
                     }
                     info!("#");
                 }
@@ -246,7 +330,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        if last_log.elapsed() >= Duration::from_millis(mode_ms) {
+        if !paused && last_log.elapsed() >= Duration::from_millis(rate_ms) {
             emit_log(&mut rng, counter);
             counter = counter.wrapping_add(1);
             last_log = Instant::now();
