@@ -1,14 +1,15 @@
-# Build firmware and flash to a board connected to the self-hosted runner.
+# Build firmware, flash to board, and verify serial output.
 #
-# Prerequisites on the runner:
-#   - espup installed (provides Xtensa Rust toolchain + ESP-IDF)
-#   - source ~/export-esp.sh has been run (or added to .bashrc so the runner
-#     picks it up automatically)
-#   - espflash installed: cargo install espflash
-#   - The user running the runner service has write permission to /dev/ttyACM3
-#     (add a udev rule or add the user to the dialout group)
-#   - The board must be connected and set to bootloader mode before the flash
-#     step: hold BOOT, tap RESET, release BOOT.
+# Fully self-contained: installs the ESP toolchain, espflash, and Python
+# dependencies on every run.  The only prerequisite on the runner is Rust
+# (rustup) and Python 3.
+#
+# Hardware requirements:
+#   - Board connected via USB Serial/JTAG at /dev/ttyACM3
+#   - Board in bootloader mode before the flash step
+#     (hold BOOT, tap RESET, release BOOT)
+#   - Runner user has write permission to /dev/ttyACM3
+#     (add to dialout group or write a udev rule)
 
 name: Build & Flash
 
@@ -35,6 +36,7 @@ jobs:
       - name: Build firmware (debug)
         run: |
           source "$HOME/export-esp.sh"
+          cargo +stable install ldproxy
           cargo build
 
       - name: Upload firmware artifact
