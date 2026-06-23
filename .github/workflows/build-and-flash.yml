@@ -73,3 +73,27 @@ jobs:
           espflash flash \
             --port /dev/ttyACM3 \
             embed-sandbox
+  verify:
+    runs-on: self-hosted
+    needs: flash
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: pip install pyserial
+
+      - name: Wait for board reboot after flash
+        run: |
+          echo "Waiting for board to boot…"
+          for i in $(seq 1 10); do
+            if [ -c /dev/ttyACM3 ]; then
+              echo "Device ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Verify serial output
+        run: python3 scripts/verify_serial.py --port /dev/ttyACM3
