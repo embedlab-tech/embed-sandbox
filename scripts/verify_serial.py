@@ -94,23 +94,40 @@ def verify() -> None:
 
     print(f"Connecting to {args.port} at {args.baud}…")
     with serial.Serial(args.port, args.baud) as ser:
-        # Flush stale input, then send a newline to trigger the prompt (#).
+        # Flush stale input, then handshake: send empty lines until we get a
+        # clean prompt (#).  This works whether the board just booted or has
+        # been idle for minutes.
         ser.reset_input_buffer()
-        ser.write(b"\n")
-        boot = read_until(ser, "#", BOOT_TIMEOUT_S)
-        if not boot:
-            print("ERROR: no boot output received", file=sys.stderr)
+        prompt_seen = False
+        for _ in range(5):
+            ser.write(b"\n")
+            lines = read_until(ser, "#", 2)
+            for line in lines:
+                body = strip_log_prefix(line)
+                if body == "#":
+                    prompt_seen = True
+                    break
+            if prompt_seen:
+                break
+
+        if not prompt_seen:
+            print("ERROR: board did not respond to handshake", file=sys.stderr)
+            for line in lines:
+                print(f"  raw: {line!r}", file=sys.stderr)
             sys.exit(1)
 
-        # Collect boot messages (everything before the first prompt line).
-        boot_msgs: list[str] = []
-        for line in boot:
+        print("Board ready.")
+
+        # Drain any leftover boot banner lines that preceded the prompt.
+        leftover: list[str] = []
+        for line in lines:
             body = strip_log_prefix(line)
             if body and body != "#":
-                boot_msgs.append(body)
-        print(f"Boot lines: {len(boot_msgs)}")
-        for m in boot_msgs:
-            print(f"  {m}")
+                leftover.append(body)
+        if leftover:
+            print("Boot banner:")
+            for m in leftover:
+                print(f"  {m}")
 
         # ---- Seed the RNG for deterministic output ---------------------------
         ser.write(b"seed 42\n")
@@ -118,15 +135,17 @@ def verify() -> None:
         resp_bodies = [
             strip_log_prefix(l) for l in resp if strip_log_prefix(l) is not None
         ]
-        # Expect: "seed set to 42 (counter reset)" followed by prompt "#"
         seed_ok = any("seed set to" in m for m in resp_bodies)
-        print(f"\nseed 42  →  {'OK' if seed_ok else 'FAIL'}")
+        print(f"seed 42  →  {'OK' if seed_ok else 'FAIL'}")
         if not seed_ok:
+            print("  raw response lines:")
+            for l in resp:
+                print(f"    {l!r}")
+            print("  parsed bodies:")
             for m in resp_bodies:
-                print(f"  got: {m}")
+                print(f"    {m!r}")
             sys.exit(1)
 
-        # ---- Emit 10 lines ---------------------------------------------------
         ser.write(b"emit 10\n")
         resp = read_until(ser, "#", CMD_TIMEOUT_S)
         resp_bodies = [
