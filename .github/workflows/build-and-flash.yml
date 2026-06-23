@@ -25,20 +25,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Source ESP environment
+      - name: Install ESP toolchain
         run: |
-          set -e
-          if [ -f "$HOME/export-esp.sh" ]; then
-            source "$HOME/export-esp.sh"
-            echo "ESP toolchain loaded"
-          else
-            echo "::warning::export-esp.sh not found at $HOME/export-esp.sh — build may fail"
-          fi
+          cargo install espup
+          espup install
           rustc --version
           rustup show active-toolchain
 
       - name: Build firmware (debug)
-        run: cargo build
+        run: |
+          source "$HOME/export-esp.sh"
+          cargo build
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
@@ -67,6 +64,8 @@ jobs:
             exit 1
           fi
 
+      - name: Install espflash
+        run: cargo install espflash
       - name: Flash board
         run: |
           chmod +x embed-sandbox
