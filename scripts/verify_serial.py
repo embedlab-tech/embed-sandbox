@@ -94,18 +94,23 @@ def verify() -> None:
 
     print(f"Connecting to {args.port} at {args.baud}…")
     with serial.Serial(args.port, args.baud) as ser:
-        # Flush stale input, then drain boot banner until the first prompt.
+        # Flush stale input, then send a newline to trigger the prompt (#).
         ser.reset_input_buffer()
+        ser.write(b"\n")
         boot = read_until(ser, "#", BOOT_TIMEOUT_S)
         if not boot:
             print("ERROR: no boot output received", file=sys.stderr)
             sys.exit(1)
 
-        print(f"Boot lines: {len(boot)}")
+        # Collect boot messages (everything before the first prompt line).
+        boot_msgs: list[str] = []
         for line in boot:
             body = strip_log_prefix(line)
-            if body:
-                print(f"  {body}")
+            if body and body != "#":
+                boot_msgs.append(body)
+        print(f"Boot lines: {len(boot_msgs)}")
+        for m in boot_msgs:
+            print(f"  {m}")
 
         # ---- Seed the RNG for deterministic output ---------------------------
         ser.write(b"seed 42\n")
