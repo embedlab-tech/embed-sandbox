@@ -81,9 +81,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
       - name: Install dependencies
-        run: pip install pyserial
+        run: |
+          python3 -m venv /tmp/verify-env
+          /tmp/verify-env/bin/pip install pyserial
+          echo "PATH=/tmp/verify-env/bin:$PATH" >> "$GITHUB_ENV"
 
       - name: Wait for board reboot after flash
         run: |
