@@ -27,7 +27,7 @@ jobs:
 
       - name: Install ESP toolchain
         run: |
-          cargo install espup
+          cargo +stable install espup
           espup install
           rustc --version
           rustup show active-toolchain
@@ -65,7 +65,7 @@ jobs:
           fi
 
       - name: Install espflash
-        run: cargo install espflash
+        run: cargo +stable install espflash
       - name: Flash board
         run: |
           chmod +x embed-sandbox
