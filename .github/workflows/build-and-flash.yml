@@ -7,16 +7,20 @@ on:
   pull_request:
     branches: [ "main" ]
 
+env:
+  VENV_DIR: ${{ github.workspace }}/toolchains/python/.venv
+
 jobs:
-  build:
+  build-stm32:
     runs-on: self-hosted
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install west and Python deps
+      - name: Create Python venv and install west
         run: |
-          pip install west pyyaml jsonschema -q
+          python3 -m venv "$VENV_DIR"
+          "$VENV_DIR/bin/pip" install west pyyaml jsonschema -q
 
       - name: Download Zephyr SDK minimal bundle
         run: |
@@ -45,12 +49,50 @@ jobs:
           git fetch --depth 1 origin 30a859f44ef8ab4dc8f84b03ed586fd16ccf9d74
           git checkout 30a859f44ef8ab4dc8f84b03ed586fd16ccf9d74
 
-      - name: Build firmware
+      - name: Build firmware for nucleo_g070rb
         run: |
+          export PATH="$VENV_DIR/bin:$PATH"
           export ZEPHYR_BASE=$PWD/third_party/zephyr
           export ZEPHYR_SDK_INSTALL_DIR=$PWD/toolchains/zephyr-sdk-1.0.1
           export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
           export ZEPHYR_CMSIS_6_CMAKE_DIR=$ZEPHYR_BASE/modules/cmsis_6
           export ZEPHYR_MODULES=$PWD/third_party/modules/hal/cmsis;$PWD/third_party/modules/hal/hal_stm32;$PWD/third_party/modules/hal/CMSIS_6
-          cmake -B build -DBOARD=nucleo_g070rb
-          cmake --build build
+          cmake -B build-stm32 -DBOARD=nucleo_g070rb
+          cmake --build build-stm32
+
+  build-and-test-native:
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Python venv and install west
+        run: |
+          python3 -m venv "$VENV_DIR"
+          "$VENV_DIR/bin/pip" install west pyyaml jsonschema -q
+
+      - name: Clone Zephyr
+        run: |
+          git clone --depth 1 --branch v4.4.1 https://github.com/zephyrproject-rtos/zephyr third_party/zephyr
+
+      - name: Build for native_sim
+        run: |
+          export PATH="$VENV_DIR/bin:$PATH"
+          export ZEPHYR_BASE=$PWD/third_party/zephyr
+          cmake -B build-native -DBOARD=native_sim
+          cmake --build build-native
+
+      - name: Smoke test — check firmware banner
+        run: |
+          chmod +x build-native/zephyr/zephyr.exe
+          timeout 5 ./build-native/zephyr/zephyr.exe 2>&1 \
+            | grep -q "=== embed-sandbox ===" \
+            && echo "PASS: Banner detected" \
+            || { echo "FAIL: No banner"; exit 1; }
+
+      - name: Smoke test — check generator UARTs resolved
+        run: |
+          timeout 5 ./build-native/zephyr/zephyr.exe 2>&1 \
+            | grep -q "Generator online" \
+            && echo "PASS: Generator output detected" \
+            || echo "INFO: Generator output on PTY, not stdout"

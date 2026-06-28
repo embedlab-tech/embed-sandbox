@@ -1,0 +1,23 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Overlay for native_sim_64 — adds virtual UARTs for testing */
+
+/ {
+	/* Virtual generator UART #1 — maps to a pseudo-terminal */
+	usart1: uart_v1 {
+		status = "okay";
+		compatible = "zephyr,native-pty-uart";
+		current-speed = <115200>;
+	};
+	/* Virtual generator UART #2 */
+	usart3: uart_v3 {
+		status = "okay";
+		compatible = "zephyr,native-pty-uart";
+		current-speed = <115200>;
+	};
+	/* Virtual generator UART #3 */
+	usart4: uart_v4 {
+		status = "okay";
+		compatible = "zephyr,native-pty-uart";
+		current-speed = <115200>;
+	};
+};
