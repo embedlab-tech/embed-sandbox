@@ -1,22 +1,15 @@
-# Rust / cargo
-/target
-**/*.rs.bk
-Cargo.lock
-
-# ESP-IDF build output (generated from sdkconfig.defaults)
-/sdkconfig
-/sdkconfig.old
-/managed_components
-/dependencies.lock
+# Build output
 /build/
-/.esp-idf
-
-# espup environment export (machine-specific)
-/export-esp.sh
 
 # Editor / OS
 .vscode/
 .idea/
 .DS_Store
-target/
-.embuild/
+
+# Python
+toolchains/python/.venv/
+__pycache__/
+
+# Auto-bootstrapped dependencies (cloned/fetched by scripts/bootstrap_zephyr.sh)
+/third_party/
+/toolchains/

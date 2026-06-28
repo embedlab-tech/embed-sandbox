@@ -1,21 +1,10 @@
-# Build firmware, flash to board, and verify serial output.
-#
-# Fully self-contained: installs the ESP toolchain, espflash, and Python
-# dependencies on every run.  The only prerequisite on the runner is Rust
-# (rustup) and Python 3.
-#
-# Hardware requirements:
-#   - Board connected via USB Serial/JTAG at /dev/ttyACM3
-#   - Board in bootloader mode before the flash step
-#     (hold BOOT, tap RESET, release BOOT)
-#   - Runner user has write permission to /dev/ttyACM3
-#     (add to dialout group or write a udev rule)
-
-name: Build & Flash
+name: Build
 
 on:
   workflow_dispatch:
   push:
+    branches: [ "main" ]
+  pull_request:
     branches: [ "main" ]
 
 jobs:
@@ -23,80 +12,45 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install ESP toolchain
+      - name: Install west and Python deps
         run: |
-          cargo +stable install espup
-          espup install
-          rustc --version
-          rustup show active-toolchain
+          pip install west pyyaml jsonschema -q
 
-      - name: Build firmware (debug)
+      - name: Download Zephyr SDK minimal bundle
         run: |
-          source "$HOME/export-esp.sh"
-          cargo +stable install ldproxy
-          cargo build
+          mkdir -p toolchains
+          cd toolchains
+          curl -L -O https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v1.0.1/zephyr-sdk-1.0.1_linux-x86_64_minimal.tar.xz
+          tar xf zephyr-sdk-1.0.1_linux-x86_64_minimal.tar.xz
+          rm zephyr-sdk-1.0.1_linux-x86_64_minimal.tar.xz
 
-      - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: embed-sandbox-firmware
-          path: target/xtensa-esp32s3-espidf/debug/embed-sandbox
-          retention-days: 1
-
-  flash:
-    runs-on: self-hosted
-    needs: build
-
-    steps:
-      - name: Download firmware artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: embed-sandbox-firmware
-
-      - name: Check flash device
+      - name: Install ARM toolchain
         run: |
-          if [ -c /dev/ttyACM3 ]; then
-            echo "Device /dev/ttyACM3 present"
-            ls -l /dev/ttyACM3
-          else
-            echo "::error::Serial device /dev/ttyACM3 not found — is the board connected?"
-            exit 1
-          fi
+          cd toolchains/zephyr-sdk-1.0.1
+          curl -L -O https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v1.0.1/toolchain_gnu_linux-x86_64_arm-zephyr-eabi.tar.xz
+          tar xf toolchain_gnu_linux-x86_64_arm-zephyr-eabi.tar.xz
+          rm toolchain_gnu_linux-x86_64_arm-zephyr-eabi.tar.xz
+          mkdir -p gnu && mv arm-zephyr-eabi gnu/
 
-      - name: Install espflash
-        run: cargo +stable install espflash
-      - name: Flash board
+      - name: Clone Zephyr and HAL modules
         run: |
-          chmod +x embed-sandbox
-          espflash flash \
-            --port /dev/ttyACM3 \
-            embed-sandbox
-  verify:
-    runs-on: self-hosted
-    needs: flash
+          git clone --depth 1 --branch v4.4.1 https://github.com/zephyrproject-rtos/zephyr third_party/zephyr
+          mkdir -p third_party/modules/hal
+          git clone --depth 1 https://github.com/zephyrproject-rtos/cmsis third_party/modules/hal/cmsis
+          git clone --depth 1 https://github.com/zephyrproject-rtos/hal_stm32 third_party/modules/hal/hal_stm32
+          git clone --depth 1 https://github.com/zephyrproject-rtos/CMSIS_6 third_party/modules/hal/CMSIS_6
+          cd third_party/modules/hal/CMSIS_6
+          git fetch --depth 1 origin 30a859f44ef8ab4dc8f84b03ed586fd16ccf9d74
+          git checkout 30a859f44ef8ab4dc8f84b03ed586fd16ccf9d74
 
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Install dependencies
+      - name: Build firmware
         run: |
-          python3 -m venv /tmp/verify-env
-          /tmp/verify-env/bin/pip install pyserial
-          echo "PATH=/tmp/verify-env/bin:$PATH" >> "$GITHUB_ENV"
-
-      - name: Wait for board reboot after flash
-        run: |
-          echo "Waiting for board to boot…"
-          for i in $(seq 1 10); do
-            if [ -c /dev/ttyACM3 ]; then
-              echo "Device ready after ${i}s"
-              break
-            fi
-            sleep 1
-          done
-
-      - name: Verify serial output
-        run: python3 scripts/verify_serial.py --port /dev/ttyACM3
+          export ZEPHYR_BASE=$PWD/third_party/zephyr
+          export ZEPHYR_SDK_INSTALL_DIR=$PWD/toolchains/zephyr-sdk-1.0.1
+          export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
+          export ZEPHYR_CMSIS_6_CMAKE_DIR=$ZEPHYR_BASE/modules/cmsis_6
+          export ZEPHYR_MODULES=$PWD/third_party/modules/hal/cmsis;$PWD/third_party/modules/hal/hal_stm32;$PWD/third_party/modules/hal/CMSIS_6
+          cmake -B build -DBOARD=nucleo_g070rb
+          cmake --build build
